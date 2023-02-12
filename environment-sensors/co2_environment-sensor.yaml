@@ -1,0 +1,213 @@
+# https://esphome.io/guides/configuration-types.html#substitutions
+substitutions:
+  devicename: environment-sensor
+  upper_devicename: Environment Sensor
+
+esphome:
+  name: $devicename
+
+esp8266:
+  board: d1_mini
+  # Generic default setting board from Espressif
+  #board: esp01_1m
+
+# Disable logging via UART
+# UART is needed for the CO2-Sensor
+logger:
+    baud_rate: 0
+
+# Enable Home Assistant API
+api:
+  encryption:
+    # Gerentated during the setup in ESPHome
+    key: "INSERT-YOUR-PASSWORD-HERE"
+
+# Change exisiting password: https://esphome.io/components/ota.html#changing-an-existing-password
+ota:
+  # Gerentated during the setup in ESPHome
+  password: "INSERT-YOUR-PASSWORD-HERE"
+
+# Your local WiFi:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: !secret fallback_wifi_ssid
+    password: !secret fallback_wifi_password
+
+# Activate the i2c bus for the BME680 sensor
+# https://esphome.io/components/i2c.html
+i2c:
+  sda: 4
+  scl: 5
+  scan: true
+  # As the esp8266 has just one i2c bus present, we don't need id's
+  #id: bus_a
+
+# Fallback portal if we can't connect to the primary WiFi
+# https://esphome.io/components/captive_portal.html?highlight=captive_portal
+captive_portal:
+
+# Configuring the Hardwar-UART for the CO2 Sensor
+# https://esphome.io/components/uart.html?highlight=uart
+uart:
+  rx_pin: 3
+  tx_pin: 1
+  baud_rate: 19200
+#  debug:
+#    direction: BOTH
+#    dummy_receiver: false
+#    after:
+#      delimiter: "\n"
+#    sequence:
+#      - lambda: UARTDebug::log_string(direction, bytes);
+
+# We are using the Bosch bsec library to operate the BME680 sensor. For detailed descriptions, check out the documentation:
+# https://esphome.io/components/sensor/bme680_bsec.html
+bme680_bsec:
+    # i2c address
+    # -----------
+    # Common values are:
+    # - 0x76
+    # - 0x77
+    # Default: 0x76
+    address: 0x77
+    # Temperature offset
+    # ------------------
+    # Useful if device is in enclosure and reads too high
+    # For example if it reads 5C too high, set this to 5
+    # This also corrects the relative humidity readings
+    # Default: 0
+    temperature_offset: 0
+    # IAQ calculation mode
+    # --------------------
+    # Available options:
+    # - static (for fixed position devices)
+    # - mobile (for on person or other moveable devices)
+    # Default: static
+    iaq_mode: static
+    # Sample rate
+    # -----------
+    # Available options:
+    # - lp (low power - samples every 3 seconds)
+    # - ulp (ultra low power - samples every 5 minutes)
+    # Default: lp
+    sample_rate: lp
+    # Interval at which to save BSEC state
+    # ------------------------------------
+    # Default: 6h
+    state_save_interval: 6h
+
+sensor:
+  # Getting data from the BME680 sensor
+  - platform: bme680_bsec
+    temperature:
+      # Temperature in °C
+      name: ${upper_devicename} Temperature
+      id: bme680_temperature
+      accuracy_decimals: 2
+    pressure:
+      # Pressure in hPa
+      name: ${upper_devicename} Pressure
+      id: bme680_pressure
+      accuracy_decimals: 2
+    humidity:
+      # Relative humidity %
+      name: ${upper_devicename} Rel. Humidity
+      id: bme680_humidity
+      accuracy_decimals: 2     
+    gas_resistance:
+      # Gas resistance in Ω
+      name: ${upper_devicename} Gas Resistance
+      id: bme680_gasresistance
+      accuracy_decimals: 0
+    iaq:
+      # Indoor air quality value
+      name: ${upper_devicename} Indoor Air Quality Value
+      id: bme680_iaq
+      unit_of_measurement: IAQ
+      accuracy_decimals: 2
+    # iaq_accuracy:
+    #   # IAQ accuracy as a numeric value of 0, 1, 2, 3
+    #   name: ${upper_devicename} Numeric IAQ Accuracy
+    #   id: bme680_iaq_accuracy
+    # co2_equivalent:
+    #   # CO2 equivalent estimate in ppm
+    #   name: ${upper_devicename} BME680 CO2 Equivalent
+    #   id: bme680_co2equivalent
+    # breath_voc_equivalent:
+    #   # Volatile organic compounds equivalent estimate in ppm
+    #   name: ${upper_devicename} Breath VOC Equivalent
+    #   id: bme680_breath_voc
+  
+  - platform: template
+    # Calculate the Absolute Humidity
+    name: ${upper_devicename} Absolute Humidity
+    lambda: |-
+      const float mw = 18.01534;    // molar mass of water g/mol
+      const float r = 8.31447215;   // Universal gas constant J/mol/K
+      return (6.112 * powf(2.718281828, (17.67 * id(bme680_temperature).state) /
+        (id(bme680_temperature).state + 243.5)) * id(bme680_humidity).state * mw) /
+        ((273.15 + id(bme680_temperature).state) * r); // in grams/m^3
+    accuracy_decimals: 2
+    update_interval: 30s
+    icon: 'mdi:water'
+    unit_of_measurement: 'g/m³'
+  - platform: template
+    name: ${upper_devicename} Dew Point
+    lambda: |-
+      return (243.5*(log(id(bme680_humidity).state/100)+((17.67*id(bme680_temperature).state)/
+      (243.5+id(bme680_temperature).state)))/(17.67-log(id(bme680_humidity).state/100)-
+      ((17.67*id(bme680_temperature).state)/(243.5+id(bme680_temperature).state))));
+    unit_of_measurement: °C
+    accuracy_decimals: 2
+    update_interval: 30s
+    icon: 'mdi:thermometer-alert'
+
+  # CO2 sensor T6613
+  # https://esphome.io/components/sensor/t6615.html
+  # For accurat meassurments, you have to configure your elevation above sealevel. 
+  # As the T6613 has no internal calibration gas sample, it calibrates automatically to "normal" outside air C02-Levels.
+  # For that the sensor has to be exposed to regularly to outside air. For example when you are venting.
+  # Alternatively you can manually calibrate the senor. Put it outside and calibrate it to 430 ppm.
+  # You'll do that by directly communicating with the UART-Interface. See datasheet of the sensor.
+  - platform: t6615
+    co2:
+      name: ${upper_devicename} CO2
+    update_interval: 30s
+
+text_sensor:
+  - platform: bme680_bsec
+    iaq_accuracy:
+      # IAQ accuracy as a text value of Stabilizing, Uncertain, Calibrating, Calibrated
+      name: ${upper_devicename} BME680 IAQ Accuracy
+  - platform: template
+    name: ${upper_devicename} IAQ Classification
+    icon: "mdi:checkbox-marked-circle-outline"
+    lambda: |-
+      if ( int(id(bme680_iaq).state) <= 50) {
+        return {"Excellent"};
+      }
+      else if (int(id(bme680_iaq).state) >= 51 && int(id(bme680_iaq).state) <= 100) {
+        return {"Good"};
+      }
+      else if (int(id(bme680_iaq).state) >= 101 && int(id(bme680_iaq).state) <= 150) {
+        return {"Lightly polluted"};
+      }
+      else if (int(id(bme680_iaq).state) >= 151 && int(id(bme680_iaq).state) <= 200) {
+        return {"Moderately polluted"};
+      }
+      else if (int(id(bme680_iaq).state) >= 201 && int(id(bme680_iaq).state) <= 250) {
+        return {"Heavily polluted"};
+      }
+      else if (int(id(bme680_iaq).state) >= 251 && int(id(bme680_iaq).state) <= 350) {
+        return {"Severely polluted"};
+      }
+      else if (int(id(bme680_iaq).state) >= 351) {
+        return {"Extremely polluted"};
+      }
+      else {
+        return {"error"};
+      }
